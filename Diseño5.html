@@ -1,0 +1,1640 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>3D Interactive Cube Viewer</title>
+  <style>
+    body {
+      margin: 0;
+      display: flex;
+      height: 100vh;
+      background-color: black;
+      color: white;
+      font-family: sans-serif;
+    }
+
+    .sidebar {
+      width: 250px;
+      background-color: #222;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .viewer {
+      flex: 1;
+      position: relative;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    .footer {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      color: #aaa;
+      font-size: 12px;
+    }
+
+    .button {
+      background: #333;
+      color: white;
+      padding: 10px;
+      margin: 5px 0;
+      cursor: pointer;
+      border: none;
+    }
+
+    .button:hover {
+      background: #444;
+    }
+    
+    /* Estilo para el canvas de WebGL */
+    #webglcanvas {
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="sidebar">
+    <h3>Controls</h3>
+    <button id="reset" class="button">Reiniciar</button>
+    <button id="girarX" class="button">Girar X</button>
+    <button id="girarY" class="button">Girar Y</button>
+    <button id="girarZ" class="button">Girar Z</button>
+    <button id="lineas" class="button">Lineas</button>
+    <button id="" class="button">Fondo Blanco</button>
+    <button id="" class="button">Fondo Verde</button>
+    <button id="" class="button">Fondo Azul</button>
+    <button id="" class="button">Fondo Rojo</button>
+  </div>
+
+  <div id="canvas-holder">
+      <canvas id="webglcanvas" 
+        style="border: none; width: 100%; height: auto; display: block;"
+        width="1875" 
+        height="1200" 
+        oncontextmenu="return false;">
+      </canvas>
+  </div>
+
+  <!-- Shaders para el cubo interactivo -->
+  <script id="vs" type="vertex">
+    #version 300 es
+    uniform mat4 uMatrizProyeccion;
+    uniform mat4 uMatrizVista;
+    uniform mat4 uMatrizModelo;
+    layout(location = 0) in vec3 aVertices;
+    layout(location = 1) in vec4 aColores;
+    out vec4 vColores;
+    void main() {
+      vColores = aColores;  
+      gl_Position = uMatrizProyeccion * uMatrizVista * uMatrizModelo * vec4(aVertices, 1.0);
+    }
+  </script>
+
+  <script id="fs" type="fragment">
+    #version 300 es
+    precision highp float;
+    in vec4 vColores;
+    out vec4 color;
+    uniform bool uModoLineas;
+    uniform vec4 uColorFondo; // Nuevo uniforme para el color de fondo
+
+    void main() {
+      if(uModoLineas) {
+        color = vec4(0.0, 0.0, 0.0, 1.0); // Líneas siempre negras
+      } else {
+        color = vColores;
+      }
+    }
+  </script>
+  
+  <script>
+        "use strict";
+
+        /* Variables globales */
+        var canvas;
+        var programaID;
+        var gl;
+        var cubo;
+        var monitor;
+        var teclado;
+        var mouse;
+        var arcBall;
+
+        /*Rotaciones*/
+        /* Variables para rotación */
+        var rotacionAutomaticaX = false;
+        var rotacionAutomaticaY = false;
+        var rotacionAutomaticaZ = false;
+        var anguloActualX = 0;  // Mantiene el ángulo actual aunque la rotación esté detenida
+        var anguloActualY = 0;
+        var anguloActualZ = 0;
+        var anguloRotacionX = 0;  // Solo para animación
+        var anguloRotacionY = 0;
+        var anguloRotacionZ = 0;
+        var velocidadRotacion = 1
+
+        //Para las lineas
+        var uModoLineas;
+        var modoLineas = false;
+
+        /*Colores de fondo*/
+        var uColorFondo;
+        var colorFondo = [0.0, 1.0, 1.0, 1.0]; // Color inicial (cyan)
+
+        /* Variables Uniformes */
+        var uMatrizProyeccion;
+        var uMatrizVista;
+        var uMatrizModelo;
+
+        /* Matrices */
+        var MatrizProyeccion = new Array(16);
+        var MatrizVista = new Array(16);
+        var MatrizModelo = new Array(16);
+
+        /* Para la interacción */
+        var tx = 0, ty = 0;
+        var sx = 1, sy = 1, sz = 1;
+        var MatrizRotacion = new Array(16);
+        var Matriz = new Array(16);
+        var boton_izq_presionado = false;
+        var boton_der_presionado = false;
+
+        /***************************************************************************/
+        /* Se crean, compilan y enlazan los programas Shader                       */
+        /***************************************************************************/
+        function compilaEnlazaLosShaders() {
+
+          /* Se compila el shader de vertice */
+          var shaderDeVertice = gl.createShader(gl.VERTEX_SHADER);
+          gl.shaderSource(shaderDeVertice, document.getElementById("vs").text.trim());
+          gl.compileShader(shaderDeVertice);
+          if (!gl.getShaderParameter(shaderDeVertice, gl.COMPILE_STATUS)) {
+             console.error(gl.getShaderInfoLog(shaderDeVertice));
+          }
+
+          /* Se compila el shader de fragmento */
+          var shaderDeFragmento = gl.createShader(gl.FRAGMENT_SHADER);
+          gl.shaderSource(shaderDeFragmento, document.getElementById("fs").text.trim());
+          gl.compileShader(shaderDeFragmento);
+          if (!gl.getShaderParameter(shaderDeFragmento, gl.COMPILE_STATUS)) {
+             console.error(gl.getShaderInfoLog(shaderDeFragmento));
+          }
+
+          /* Se enlaza ambos shader */
+          programaID = gl.createProgram();
+          gl.attachShader(programaID, shaderDeVertice); 
+          gl.attachShader(programaID, shaderDeFragmento);
+          gl.linkProgram(programaID);
+          if (!gl.getProgramParameter(programaID, gl.LINK_STATUS)) {
+             console.error(gl.getProgramInfoLog(programaID));
+          }
+
+          /* Se instala el programa de shaders para utilizarlo */
+          gl.useProgram(programaID);
+        }
+
+        /***************************************************************************/
+        /* Transformaciones mediante matrices                                      */
+        /***************************************************************************/
+
+        /* Convierte de grados a radianes */
+        function toRadians(grados) {
+          return grados * Math.PI / 180;
+        };
+
+        /* Matriz Identidad */
+        function identidad(r) {
+          r[0] = 1; r[4] = 0; r[ 8] = 0; r[12] = 0;
+          r[1] = 0; r[5] = 1; r[ 9] = 0; r[13] = 0;
+          r[2] = 0; r[6] = 0; r[10] = 1; r[14] = 0;
+          r[3] = 0; r[7] = 0; r[11] = 0; r[15] = 1;
+        }
+
+        /* Traslación - glTranslatef */
+        function traslacion(matriz, tx, ty, tz) {
+          var r = new Array(16);
+          r[0] = 1; r[4] = 0; r[ 8] = 0; r[12] = tx;
+          r[1] = 0; r[5] = 1; r[ 9] = 0; r[13] = ty;
+          r[2] = 0; r[6] = 0; r[10] = 1; r[14] = tz;
+          r[3] = 0; r[7] = 0; r[11] = 0; r[15] =  1;
+          multiplica(matriz, matriz, r);
+        }
+
+        /* Escalación - glScalef */
+        function escalacion(matriz, sx, sy, sz) { 
+          var r = new Array(16);
+          r[0] = sx; r[4] =  0; r[ 8] =  0; r[12] =  0;
+          r[1] =  0; r[5] = sy; r[ 9] =  0; r[13] =  0;
+          r[2] =  0; r[6] =  0; r[10] = sz; r[14] =  0;
+          r[3] =  0; r[7] =  0; r[11] =  0; r[15] =  1;
+          multiplica(matriz, matriz, r);
+        }
+
+        /* Rotación sobre X - glRotatef */
+        function rotacionX(matriz, theta){
+          let r = new Array(16);
+          var c = Math.cos(toRadians(theta));
+          var s = Math.sin(toRadians(theta));
+          r[0] =  1; r[4] =  0; r[ 8] =  0; r[12] = 0;
+          r[1] =  0; r[5] =  c; r[ 9] = -s; r[13] = 0;
+          r[2] =  0; r[6] =  s; r[10] =  c; r[14] = 0;
+          r[3] =  0; r[7] =  0; r[11] =  0; r[15] = 1;
+          multiplica(matriz, matriz, r); 
+        }
+
+        /* Rotación sobre Y - glRotatef */
+        function rotacionY(matriz, theta){
+          let r = new Array(16);
+          var c = Math.cos(toRadians(theta));
+          var s = Math.sin(toRadians(theta));
+          r[0] =  c; r[4] =  0; r[ 8] =  s; r[12] = 0;
+          r[1] =  0; r[5] =  1; r[ 9] =  0; r[13] = 0;
+          r[2] = -s; r[6] =  0; r[10] =  c; r[14] = 0;
+          r[3] =  0; r[7] =  0; r[11] =  0; r[15] = 1;
+          multiplica(matriz, matriz, r);
+        }
+	
+        /* Rotación sobre Z - glRotatef */
+        function rotacionZ(matriz, theta){
+          let r = new Array(16);
+          var c = Math.cos(toRadians(theta));
+          var s = Math.sin(toRadians(theta));
+          r[0] =  c; r[4] = -s; r[ 8] =  0; r[12] = 0;
+          r[1] =  s; r[5] =  c; r[ 9] =  0; r[13] = 0;
+          r[2] =  0; r[6] =  0; r[10] =  1; r[14] = 0;
+          r[3] =  0; r[7] =  0; r[11] =  0; r[15] = 1;
+          multiplica(matriz, matriz, r);
+        }
+
+        /* Proyección Paralela - glOrtho */
+        function ortho(r, izq, der, abj, arr, cerca, lejos) {
+          r[0] = 2/(der - izq); r[4] =             0; r[ 8] =                  0; r[12] =         -(der + izq)/(der - izq);
+          r[1] =             0; r[5] = 2/(arr - abj); r[ 9] =                  0; r[13] =         -(arr + abj)/(arr - abj);
+          r[2] =             0; r[6] =             0; r[10] = -2/(lejos - cerca); r[14] = -(lejos + cerca)/(lejos - cerca);
+          r[3] =             0; r[7] =             0; r[11] =                  0; r[15] =                                1;
+        }
+
+        /* Proyección Perspectiva - glFrustum */
+        function frustum(r, izq, der, abj, arr, cerca, lejos) {
+          r[0] = 2*cerca/(der-izq); r[4] =                 0; r[ 8] =          (der+izq)/(der-izq); r[12] =                            0;
+          r[1] =                 0; r[5] = 2*cerca/(arr-abj); r[ 9] =          (arr+abj)/(arr-abj); r[13] =                            0;
+          r[2] =                 0; r[6] =                 0; r[10] = -(lejos+cerca)/(lejos-cerca); r[14] = -2*lejos*cerca/(lejos-cerca);
+          r[3] =                 0; r[7] =                 0; r[11] =                           -1; r[15] =                            0;
+        }
+
+        /* Proyección Perspectiva - gluPerspective */
+        function perspective(r, fovy, aspecto, cerca, lejos) {
+          var ang = fovy * 0.5;
+          var f = (Math.abs(Math.sin(toRadians(ang))) < 1e-8 ? 0 : 1) / Math.tan(toRadians(ang));
+          r[0] = f/aspecto; r[4] = 0; r[ 8] =                                  0; r[12] =                                       0;
+          r[1] =         0; r[5] = f; r[ 9] =                                  0; r[13] =                                       0;
+          r[2] =         0; r[6] = 0; r[10] = -(lejos + cerca) / (lejos - cerca); r[14] =  -2.0 * lejos * cerca / (lejos - cerca);
+          r[3] =         0; r[7] = 0; r[11] =                              - 1.0; r[15] =                                       0;
+        }
+
+        /* Multiplicación de matrices de 4 x 4 */
+        function multiplica(c, a, b) {
+          let r = new Array(16);
+          let i, j, k;
+          for (i = 0; i < 4; i++){
+            for (j = 0; j < 4; j++){
+              let s = 0;
+              for (k = 0; k < 4; k++)
+                s = s + a[i + k * 4] * b[k + j * 4];
+                r[i + j * 4] = s;
+              }
+            }
+          for (i = 0; i < 16; i++)
+            c[i] = r[i];
+        }
+
+        /***************************************************************************/
+        /* La Clase Vector3                                                        */
+        /***************************************************************************/
+
+        class Vector3 {
+
+          /**
+           * Construye un nuevo Vector.
+           */
+          constructor(x, y, z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+          }
+
+          /**
+           *                   u = Suma de vectores
+           *  u = v1 + v2     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+           *                   u = (v1.x + v2.x, v1.y + v2.y, v1.z + v2.z)
+           */
+          mas(v2) {
+            return (new Vector3(this.x + v2.x, this.y + v2.y, this.z + v2.z));
+          }
+
+          /**
+           *                   u = Resta de vectores
+           *  u = v1 - v2     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+           *                   u = (v1.x - v2.x, v1.y - v2.y, v1.z - v2.z)
+           */
+          menos(v2) {
+            return (new Vector3(this.x - v2.x, this.y - v2.y, this.z - v2.z));
+          }
+
+          /**
+           *                      u x v = Producto vectorial o producto cruz
+           * u = (u.x, u.y, u.z) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+           * v = (v.x, v.y, v.z)  u x v = (u.y * v.z - u.z * v.y,   
+           *                               u.z * v.x - u.x * v.z,
+           *                               u.x * v.y - u.y * v.x)                  
+           */
+          producto_vectorial(v2) {
+            var r = new Vector3();
+            r.x = (this.y * v2.z) - (this.z * v2.y);
+            r.y = (this.z * v2.x) - (this.x * v2.z);
+            r.z = (this.x * v2.y) - (this.y * v2.x);
+            return r;
+          }
+
+          /**
+           *                      u . v = Producto escalar o producto punto
+           * u = (u.x, u.y, u.z) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+           * v = (v.x, v.y, v.z)  u . v = u.x v.x + u.y v.y + u.z v.z
+           *                                          
+           */
+          producto_escalar(v2) {
+            return (this.x * v2.x) + (this.y * v2.y) + (this.z * v2.z);
+          }
+
+          /**
+           *                     |v| = Longitud de un vector o magnitud
+           * v = (x, y, z)    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+           *                     |v| = raiz_cuadrada (x^2 + y^2 + z^2) 
+           *                                          
+           */
+          longitud() {
+            return (Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z));
+          }
+
+          /**
+           *        v            u = Vector unitario o de longitud 1
+           *  u  = ---        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+           *       |v|           u = Vector normalizado
+           *                     
+           */
+          normaliza() {
+            var l = this.longitud();
+            if (l > 0 ) {
+              this.x = this.x / l;
+              this.y = this.y / l;
+              this.z = this.z / l;
+            }
+          }
+          /**
+           *    3
+           *     ^
+           *     |
+           *   v |
+           *     |
+           *    1 -------- > 2
+           */
+          normal(v1, v2, v3) {
+            var u = new Vector3(); // vector u
+            var v = new Vector3(); // vector v
+            var n = new Vector3(); // vector n
+
+            /* Calcula los vectores u y v */
+            u = v2.menos(v1);
+            v = v3.menos(v1);
+
+            /* n = u x v */
+            n = u.producto_vectorial(v);
+ 	    
+            /* Normaliza */
+            n.normaliza();
+ 	    
+            return n;
+          }
+
+          toString() {
+            return "Vector3 [x=" + this.x + ", y=" + this.y + ", z=" + this.z + "]";
+          }
+        }
+
+        /***************************************************************************/
+        /* ArcBall: Obtiene los vectores U y V de la esfera (x^2 + y^2 + z^2 = 1). */
+        /***************************************************************************/
+
+        var Punto2f = function(x, y) {
+          // Atributos publicos
+          this.x = x;
+          this.y = y;
+        }
+
+        class ArcBall {
+
+          /**
+           * Construye un nuevo ArcBall.
+           */
+          constructor(w, h) {
+            this.Epsilon = 1.0e-5;
+            this.U = new Vector3();
+            this.V = new Vector3();
+            this.ajusta(w, h);
+          }
+
+          /* Ajusta el ancho y alto de la ventana */
+          ajusta(w, h) {
+            if (!((w > 1.0) && (h > 1.0)))
+              document.write("ERROR");
+
+            /* Ajusta el factor para el ancho y alto (2 = [-1..1]) */
+            this.ajustaAncho = 2.0 / (w - 1.0);
+            this.ajustaAlto = 2.0 / (h - 1.0);
+          }
+
+          /* Obtiene el vector dado un punto (x,y) */
+          obtieneVector(vector, x, y) {
+            /* Copia punto */
+            let temp = new Punto2f(x, y);
+
+            /* Ajusta las coordenadas del punto al rango [-1..1] */
+            temp.x = (temp.x * this.ajustaAncho) - 1.0;
+            temp.y = 1.0 - (temp.y * this.ajustaAlto);
+
+            /* Calcula el cuadrado de la longitud del vector */
+            let longitud2 = (temp.x * temp.x) + (temp.y * temp.y);
+		
+            /* 
+             * Considerando que: radio^2 = x^2 + y^2 + z^2
+             * ¿Cuales son los valores de x, y y z?
+             * 
+             * Si el punto está fuera de la esfera... (longitud2 > 1)
+             */
+
+            if (longitud2 > 1.0) {
+              /* Calcula un factor de normalización (radio / sqrt(longitud2)) */
+              let norma = (1.0 / Math.sqrt(longitud2));
+
+              /* Retorna el vector "normalizado", un punto sobre la esfera */
+              vector.x = temp.x * norma;
+              vector.y = temp.y * norma;
+              vector.z = 0.0;
+            } else { /* e.o.c. está dentro */
+              /*
+               * Retorna un vector, un punto dentro la esfera 
+               * z = sqrt(radio^cuadrado - (x^2 + y^2))
+               */
+              vector.x = temp.x;
+              vector.y = temp.y;
+              vector.z = Math.sqrt(1.0 - longitud2);
+            }
+          }
+
+          /* Obtiene el vector U */
+          primerPunto(x, y) {
+            this.obtieneVector(this.U, x, y);
+          }
+
+          /* Obtiene el Cuaternion de U y V */
+          segundoPunto(x, y) {
+
+            let q = new Cuaternion();
+
+            /* Obtiene el vector V */
+            this.obtieneVector(this.V, x, y);
+
+            /* Retorna el cuaternión equivalente a la rotación. */
+            if (q != null) {
+
+              /* Calcula la Normal = U x V */
+              let Normal = this.U.producto_vectorial(this.V);
+
+              /* Calcula la longitud de la normal */
+              if (Normal.longitud() > this.Epsilon) { /* si no es cero */
+                q.x = Normal.x;
+                q.y = Normal.y;
+                q.z = Normal.z;
+                /* w  = (theta / 2), donde theta es el ángulo de rotación */
+                q.w = this.U.producto_escalar(this.V);
+              } else { /* si es cero */
+                /* U y V coinciden */
+                q.x = q.y = q.z = q.w = 0.0;
+              }
+            }
+            return q;
+          }
+        }
+
+        /***************************************************************************/
+        /* Cuaternion: Realiza las operaciones de los cuaterniones.                */
+        /***************************************************************************/
+
+        class Cuaternion {
+
+          /**
+           * Construye un nuevo Cuaternion.
+           */
+          constructor(w, x, y, z) {
+            this.w = w;
+            this.x = x;
+            this.y = y;
+            this.z = z;
+          }
+
+          inicializa(w, v) {
+            this.w = w;
+            this.x = v.x;
+            this.y = v.y;
+            this.z = v.z;
+          }
+
+          // norma^2 = w^2 + x^2 + y^2 + z^2
+          norma2() {
+            return (this.w * this.w + this.x * this.x + this.y * this.y + this.z * this.z);
+          }
+
+          // Conjugado
+          conjugado() {
+            x = -this.x;
+            y = -this.y;
+            z = -this.z;
+            return this;
+          }
+
+          // Cuaternion q = Cuaternion a . Cuaternion b
+          multiplica(a, b) {
+            let q = new Cuaternion(0,0,0,0);
+            q.w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z;
+            q.x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y;
+            q.y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x;
+            q.z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w;
+            return q;
+          }
+
+          // Cuaternion q = Cuaternion a . b
+          multiplica_escalar(a, b) {
+            let q = new Cuaternion(0,0,0,0);
+            q.w = a.w * b;
+            q.x = a.x * b;
+            q.y = a.y * b;
+            q.z = a.z * b;
+            return q;
+          }
+
+          // q' = q . p . q^(-1)
+          rota(q, p) {   // q es Cuaternion y p es Vector3
+            let p_homogeneo = new Cuaternion(0, 0, 0, 0);
+            p_homogeneo.inicializa(0, p);
+            let p_prima = this.multiplica(q, this.multiplica(p_homogeneo, q.inverso()));
+            return (new Vector3(p_prima.x, p_prima.y, p_prima.z));
+          }
+	
+          // q' = q . p . q*
+          rota1(q, p) {  // q es Cuaternion y p es Vector3
+            let p_homogeneo = new Cuaternion(0, 0, 0, 0);
+            p_homogeneo.inicializa(0, p);
+            let p_prima = this.multiplica(q, this.multiplica(p_homogeneo, q.conjugado()));
+            return (new Vector3(p_prima.x, p_prima.y, p_prima.z));
+          }
+
+          // q = q^(-1)
+          inverso() {
+            let q = new Cuaternion(0,0,0,0);
+            // normal^2 = a . b
+            let n = this.norma2();
+            if (n <= 1e-8)
+              document.write("INVERSO: Error");
+            q = multiplica_escalar(new Cuaternion(this.w, -this.x, -this.y, -this.z), 1 / n);
+            return q;
+          }
+
+          /* Convierte el cuaternión a una matriz de rotación */
+          static rota2(a, q) {
+            let d, s;
+            d = (q.x * q.x) + (q.y * q.y) + (q.z * q.z) + (q.w * q.w);
+            s = (d > 0.0) ? (2.0 / d) : 0.0;
+            a[0] =  1.0 - (q.y*q.y + q.z*q.z) * s; a[4] =        (q.x*q.y - q.w*q.z) * s; a[8]  =        (q.x*q.z + q.w*q.y) * s; a[12] = 0;
+            a[1] =        (q.x*q.y + q.w*q.z) * s; a[5] = 1.0  - (q.x*q.x + q.z*q.z) * s; a[9]  =        (q.y*q.z - q.w*q.x) * s; a[13] = 0;
+            a[2] =        (q.x*q.z - q.w*q.y) * s; a[6] =        (q.y*q.z + q.w*q.x) * s; a[10] = 1.0  - (q.x*q.x + q.y*q.y) * s; a[14] = 0;
+            a[3] =                              0; a[7] =                              0; a[11] =                              0; a[15] = 1;
+          }
+
+          toString() {
+            return "Cuaternion [w=" + this.w + ", x=" + this.x + ", y=" + this.y + ", z=" + this.z + "]";
+          }
+        }
+
+        /***********************************************************************************/
+        /* Se define la geometría y se almacenan en los buffers de memoria y se renderiza. */
+        /***********************************************************************************/
+        
+        class Cubo {
+          constructor(gl) {
+
+            /**
+             *       3 --------- 2
+             *       /|        /|   
+             *      / |       / |
+             *    7 --------- 6 |
+             *     |  |      |  |
+             *     | 0 ------|-- 1 
+             *     | /       | /
+             *     |/        |/
+             *    4 --------- 5  
+             */
+
+            /* Las coordenadas cartesianas (x, y, z) */
+            var vertices = [
+               // Frente
+               -1, -1,  1, // 4   0
+                1, -1,  1, // 5   1
+                1,  1,  1, // 6   2
+               -1,  1,  1, // 7   3
+               // Atrás
+               -1,  1, -1, // 3   4
+                1,  1, -1, // 2   5
+                1, -1, -1, // 1   6
+               -1, -1, -1, // 0   7
+               // Izquierda
+               -1, -1, -1, // 0   8
+               -1, -1,  1, // 4   9
+               -1,  1,  1, // 7  10 
+               -1,  1, -1, // 3  11
+               // Derecha
+                1, -1,  1, // 5  12 
+                1, -1, -1, // 1  13
+                1,  1, -1, // 2  14
+                1,  1,  1, // 6  15
+               // Abajo
+               -1, -1, -1, // 0  16
+                1, -1, -1, // 1  17
+                1, -1,  1, // 5  18
+               -1, -1,  1, // 4  19
+               // Arriba
+               -1,  1,  1, // 7  20
+                1,  1,  1, // 6  21
+                1,  1, -1, // 2  22
+               -1,  1, -1  // 3  23
+            ];
+
+            /* Los colores x c/vértice (r,g,b,a) */
+            var colores = [
+               // Frente - lila
+                1, 0, 1, 1, // 4   0
+                1, 0, 1, 1, // 5   1
+                1, 0, 1, 1, // 6   2
+                1, 0, 1, 1, // 7   3	
+               // Atrás - amarillo
+                1, 1, 0, 1, // 3   4	
+                1, 1, 0, 1, // 2   5
+                1, 1, 0, 1, // 1   6	
+                1, 1, 0, 1, // 0   7	
+               // Izquierda - celeste
+                0, 1, 1, 1, // 0   8
+                0, 1, 1, 1, // 4   9
+                0, 1, 1, 1, // 7  10
+                0, 1, 1, 1, // 3  11
+               // Derecha - rojo
+                1, 0, 0, 1, // 5  12
+                1, 0, 0, 1, // 1  13
+                1, 0, 0, 1, // 2  14
+                1, 0, 0, 1, // 6  15
+               // Abajo - azul
+                0, 0, 1, 1, // 0  16
+                0, 0, 1, 1, // 1  17
+                0, 0, 1, 1, // 5  18
+                0, 0, 1, 1, // 4  19
+               // Arriba - verde
+                0, 1, 0, 1, // 7  20
+                0, 1, 0, 1, // 6  21
+                0, 1, 0, 1, // 2  22
+                0, 1, 0, 1  // 3  23
+            ];
+
+            /* Indices */
+            var indices = [ 
+              0,  1,  2,  0,  2,  3, // Frente
+              4,  5,  6,  4,  6,  7, // Atrás
+              8,  9, 10,  8, 10, 11, // Izquierda 
+             12, 13, 14, 12, 14, 15, // Derecha
+             16, 17, 18, 16, 18, 19, // Abajo
+             20, 21, 22, 20, 22, 23  // Arriba
+            ];
+
+            this.cuboVAO = gl.createVertexArray();
+            gl.bindVertexArray(this.cuboVAO);
+
+            var codigoVertices = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, codigoVertices);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(0);
+            gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+
+            var codigoColores = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, codigoColores);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colores), gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(1);
+            gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0);
+
+             var codigoDeIndices = gl.createBuffer();
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, codigoDeIndices);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+
+            gl.bindVertexArray(null);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+          }
+
+          dibuja(gl) {
+            gl.bindVertexArray(this.cuboVAO);
+            gl.drawElements(gl.TRIANGLES, 36, gl.UNSIGNED_SHORT, 0);
+            gl.bindVertexArray(null);
+          }
+        }
+
+
+
+        class MonitorPlano {
+  constructor(gl) {
+    // Dimensiones realistas para un monitor 16:9 (ancho, alto, grosor)
+    const ancho = 1.6;
+    const alto = 0.9;
+    const grosor = 0.05;
+    const grosorMarco = 0.02;
+    
+    // 24 vértices (6 caras x 4 vértices) como en el cubo original
+    var vertices = [
+      // Pantalla frontal (con marco)
+      // Esquina inferior izquierda (marco)
+      -ancho/2, -alto/2, grosor/2,
+      // Esquina inferior derecha (marco)
+      ancho/2, -alto/2, grosor/2,
+      // Esquina superior derecha (marco)
+      ancho/2, alto/2, grosor/2,
+      // Esquina superior izquierda (marco)
+      -ancho/2, alto/2, grosor/2,
+      
+      // Parte trasera
+      -ancho/2, -alto/2, -grosor/2,
+      ancho/2, -alto/2, -grosor/2,
+      ancho/2, alto/2, -grosor/2,
+      -ancho/2, alto/2, -grosor/2,
+      
+      // Lado izquierdo (marco grueso)
+      -ancho/2, -alto/2, grosor/2,
+      -ancho/2, -alto/2, -grosor/2,
+      -ancho/2, alto/2, -grosor/2,
+      -ancho/2, alto/2, grosor/2,
+      
+      // Lado derecho (marco grueso)
+      ancho/2, -alto/2, grosor/2,
+      ancho/2, -alto/2, -grosor/2,
+      ancho/2, alto/2, -grosor/2,
+      ancho/2, alto/2, grosor/2,
+      
+      // Base inferior (con soporte)
+      -ancho/3, -alto/2, grosor/2,
+      ancho/3, -alto/2, grosor/2,
+      ancho/3, -alto/2, -grosor*3,
+      -ancho/3, -alto/2, -grosor*3,
+      
+      // Parte superior (marco delgado)
+      -ancho/2, alto/2, grosor/2,
+      ancho/2, alto/2, grosor/2,
+      ancho/2, alto/2, -grosor/2,
+      -ancho/2, alto/2, -grosor/2
+    ];
+
+    // Colores (pantalla gris, marco negro)
+    var colores = [
+      // Pantalla frontal (área de visualización gris, marco negro)
+      0.9, 0.9, 0.9, 1,  // Centro pantalla
+      0.9, 0.9, 0.9, 1,
+      0.9, 0.9, 0.9, 1,
+      0.9, 0.9, 0.9, 1,
+      
+      // Parte trasera (negro mate)
+      0.1, 0.1, 0.1, 1,
+      0.1, 0.1, 0.1, 1,
+      0.1, 0.1, 0.1, 1,
+      0.1, 0.1, 0.1, 1,
+      
+      // Lados (negro con detalle)
+      0.2, 0.2, 0.2, 1,
+      0.2, 0.2, 0.2, 1,
+      0.2, 0.2, 0.2, 1,
+      0.2, 0.2, 0.2, 1,
+      
+      // Lado derecho
+      0.2, 0.2, 0.2, 1,
+      0.2, 0.2, 0.2, 1,
+      0.2, 0.2, 0.2, 1,
+      0.2, 0.2, 0.2, 1,
+      
+      // Base (negro con acentos)
+      0.15, 0.15, 0.15, 1,
+      0.15, 0.15, 0.15, 1,
+      0.15, 0.15, 0.15, 1,
+      0.15, 0.15, 0.15, 1,
+      
+      // Parte superior (marco delgado)
+      0.2, 0.2, 0.2, 1,
+      0.2, 0.2, 0.2, 1,
+      0.2, 0.2, 0.2, 1,
+      0.2, 0.2, 0.2, 1
+    ];
+
+    // Índices (6 caras x 2 triángulos x 3 vértices = 36 índices)
+    var indices = [
+      0, 1, 2, 0, 2, 3,    // Pantalla frontal
+      4, 5, 6, 4, 6, 7,    // Parte trasera
+      8, 9,10, 8,10,11,    // Lado izquierdo
+     12,13,14,12,14,15,    // Lado derecho
+     16,17,18,16,18,19,    // Base
+     20,21,22,20,22,23     // Parte superior
+    ];
+
+    this.monitorVAO = gl.createVertexArray();
+    gl.bindVertexArray(this.monitorVAO);
+
+    // Configuración de buffers (igual que tu cubo original)
+    var vertexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+
+    var colorBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colores), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0);
+
+    var indexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+
+    gl.bindVertexArray(null);
+
+    // Buffer de aristas (bordes del monitor)
+    const aristas = [
+      // Contorno frontal
+      0,1, 1,2, 2,3, 3,0,
+      // Contorno trasero
+      4,5, 5,6, 6,7, 7,4,
+      // Conectores laterales
+      0,4, 1,5, 2,6, 3,7,
+      // Base
+      16,17, 17,18, 18,19, 19,16
+    ];
+    
+    this.numAristas = aristas.length;
+    this.aristasBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.aristasBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(aristas), gl.STATIC_DRAW);
+    // ============ FIN DE AGREGADO ============ //
+  }
+
+  dibuja(gl) {
+    gl.bindVertexArray(this.monitorVAO);
+    
+    if(modoLineas) {
+      gl.drawElements(gl.LINES, this.numAristas, gl.UNSIGNED_SHORT, 0); // Usa aristas
+    } else {
+      gl.drawElements(gl.TRIANGLES, 36, gl.UNSIGNED_SHORT, 0); // Modo normal
+    }
+    
+    gl.bindVertexArray(null);
+  }
+}
+
+class TecladoMejorado {
+  constructor(gl) {
+    // Dimensiones básicas
+    const ancho = 1.6;
+    const prof = 0.4;
+    const grosor = 0.05;
+    const alturaTeclas = 0.02;
+    
+    // Vértices principales (cuerpo del teclado)
+    var vertices = [
+      // Cara superior (teclas)
+      -ancho/2, 0, grosor/2,               // 0
+       ancho/2, 0, grosor/2,               // 1
+       ancho/2, 0, grosor/2 + alturaTeclas, // 2
+      -ancho/2, 0, grosor/2 + alturaTeclas, // 3
+      
+      // Cara inferior
+      -ancho/2, -prof, -grosor/2,          // 4
+       ancho/2, -prof, -grosor/2,          // 5
+       ancho/2, -prof, -grosor/2,          // 6
+      -ancho/2, -prof, -grosor/2,          // 7
+    ];
+
+    // Geometría de las teclas (líneas divisorias)
+    const filas = 5;
+    const columnas = 15;
+    const espacioX = ancho / columnas;
+    const espacioY = prof / filas;
+    
+    // Añadimos vértices para las líneas entre teclas
+    for (let f = 0; f <= filas; f++) {
+      const y = -f * espacioY;
+      vertices.push(
+        -ancho/2, y, grosor/2 + alturaTeclas,  // Inicio línea horizontal
+         ancho/2, y, grosor/2 + alturaTeclas   // Fin línea horizontal
+      );
+    }
+    
+    for (let c = 0; c <= columnas; c++) {
+      const x = -ancho/2 + c * espacioX;
+      vertices.push(
+        x, 0, grosor/2 + alturaTeclas,        // Inicio línea vertical
+        x, -prof + espacioY, grosor/2 + alturaTeclas // Fin línea vertical (más corta)
+      );
+    }
+
+    // Colores (cuerpo negro, teclas grises, líneas oscuras)
+    var colores = [
+      // Cara superior (teclas - gris claro)
+      ...Array(4).fill([0.8, 0.8, 0.8, 1]).flat(),
+      // Cara inferior (negro)
+      ...Array(4).fill([0.1, 0.1, 0.1, 1]).flat(),
+      // Líneas horizontales (gris oscuro)
+      ...Array((filas + 1) * 2).fill([0.3, 0.3, 0.3, 1]).flat(),
+      // Líneas verticales (gris oscuro)
+      ...Array((columnas + 1) * 2).fill([0.3, 0.3, 0.3, 1]).flat()
+    ];
+
+    // Índices para el cuerpo (cubo)
+    var indices = [
+      0, 1, 2, 0, 2, 3,    // Cara superior
+      4, 5, 6, 4, 6, 7,     // Cara inferior
+      0, 4, 7, 0, 7, 3,     // Lado izquierdo
+      1, 5, 6, 1, 6, 2,     // Lado derecho
+      0, 1, 5, 0, 5, 4,     // Frente
+      3, 2, 6, 3, 6, 7      // Atrás
+    ];
+
+    // Índices para las líneas (dibujado como LINES)
+    const baseLineas = 8; // Después de los 8 vértices del cuerpo
+    // Líneas horizontales
+    for (let i = 0; i <= filas; i++) {
+      const idx = baseLineas + i * 2;
+      indices.push(idx, idx + 1);
+    }
+    // Líneas verticales
+    const baseVerticales = baseLineas + (filas + 1) * 2;
+    for (let i = 0; i <= columnas; i++) {
+      const idx = baseVerticales + i * 2;
+      indices.push(idx, idx + 1);
+    }
+
+    this.tecladoVAO = gl.createVertexArray();
+    gl.bindVertexArray(this.tecladoVAO);
+
+    // Buffers
+    var vertexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+
+    var colorBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colores), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0);
+
+    var indexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+
+    gl.bindVertexArray(null);
+
+    // Guardamos conteos para el renderizado
+    this.numIndicesCuerpo = 36; // 12 triángulos * 3 vértices
+    this.numIndicesLineas = indices.length - this.numIndicesCuerpo;
+  }
+
+  dibuja(gl) {
+    gl.bindVertexArray(this.tecladoVAO);
+    
+    // ============ MODIFICAR ESTA PARTE ============ //
+    if(modoLineas) {
+      gl.lineWidth(2.0); // Líneas más gruesas
+      gl.drawElements(
+        gl.LINES, 
+        this.numIndicesLineas, 
+        gl.UNSIGNED_SHORT, 
+        this.numIndicesCuerpo * 2
+      );
+    } else {
+      gl.drawElements(gl.TRIANGLES, this.numIndicesCuerpo, gl.UNSIGNED_SHORT, 0);
+      gl.lineWidth(1.0); // Líneas finas para divisiones
+      gl.drawElements(
+        gl.LINES, 
+        this.numIndicesLineas, 
+        gl.UNSIGNED_SHORT, 
+        this.numIndicesCuerpo * 2
+      );
+    }
+    // ============ FIN DE MODIFICACIÓN ============ //
+    
+    gl.bindVertexArray(null);
+  }
+}
+
+        class MouseDetallado {
+  constructor(gl) {
+    // Dimensiones y parámetros del mouse
+    const length = 0.5;    // Largo total
+    const width = 0.3;     // Ancho en la parte media
+    const height = 0.15;   // Altura máxima
+    const tailWidth = 0.25; // Ancho en la parte trasera
+    const frontWidth = 0.2; // Ancho en la parte delantera
+    
+    // Colores (esquema blanco/gris)
+    const colorBase = [1, 1, 1, 1];             // Blanco muy claro
+    const colorTop = [1, 1, 1, 1];              // Gris muy claro
+    const colorWheel = [1, 0.7, 0.7, 1];         // Gris claro
+    const colorButtons = [1, 1, 1, 1];           // Blanco ligeramente grisáceo
+    const colorSide = [0.95, 0.95, 0.95, 1];          // Gris medio para los lados
+    const colorLED = [0.9, 0.1, 0.1, 1];           // Rojo para el LED
+    
+    // Arrays para vértices, normales y colores
+    let vertices = [];
+    let normals = [];
+    let colors = [];
+    let indices = [];
+    let index = 0;
+    
+    // Función para añadir un vértice con normal y color
+    function addVertex(x, y, z, nx, ny, nz, color) {
+      vertices.push(x, y, z);
+      normals.push(nx, ny, nz);
+      colors.push(...color);
+      return index++;
+    }
+    
+    // 1. Base inferior (plana)
+    const base = [
+      addVertex(-width/2, 0, -length/2, 0, -1, 0, colorBase),   // 0
+      addVertex(width/2, 0, -length/2, 0, -1, 0, colorBase),    // 1
+      addVertex(width/2, 0, length/2, 0, -1, 0, colorBase),     // 2
+      addVertex(-width/2, 0, length/2, 0, -1, 0, colorBase)     // 3
+    ];
+    
+    // 2. Parte superior curvada (con más detalle)
+    const topVertices = [];
+    const segments = 10;
+    const lengthSegments = 8;
+    
+    // Creamos una superficie curvada más detallada
+    for (let l = 0; l <= lengthSegments; l++) {
+      const tLength = l / lengthSegments; // 0 a 1 a lo largo del mouse
+      const z = -length/2 + tLength * length;
+      
+      // Ancho variable (más estrecho en los extremos)
+      const currentWidth = frontWidth + (tailWidth - frontWidth) * tLength;
+      
+      for (let w = 0; w <= segments; w++) {
+        const tWidth = w / segments; // 0 a 1 a lo ancho
+        const x = -currentWidth/2 + tWidth * currentWidth;
+        
+        // Perfil de altura (curva suave)
+        const y = height * Math.sin(tLength * Math.PI * 0.7) * 
+                 (1 - 0.3 * Math.abs(tWidth - 0.5));
+        
+        // Normal aproximada (para iluminación)
+        const nx = 0;
+        const ny = Math.cos(tLength * Math.PI * 0.7);
+        const nz = 0;
+        
+        topVertices.push(
+          addVertex(x, y, z, nx, ny, nz, 
+                   tLength > 0.7 ? colorTop : colorButtons)
+        );
+      }
+    }
+    
+    // 3. Lados del mouse
+    const sideVertices = [];
+    for (let i = 0; i <= lengthSegments; i++) {
+      const t = i / lengthSegments;
+      const z = -length/2 + t * length;
+      const currentWidth = frontWidth + (tailWidth - frontWidth) * t;
+      
+      // Puntos laterales
+      const yBase = 0;
+      const yTop = height * Math.sin(t * Math.PI * 0.7);
+      
+      // Lado izquierdo
+      sideVertices.push(
+        addVertex(-currentWidth/2, yBase, z, -0.7, 0.3, 0, colorSide), // base
+        addVertex(-currentWidth/2, yTop, z, -0.7, 0.3, 0, colorSide)   // top
+      );
+      
+      // Lado derecho
+      sideVertices.push(
+        addVertex(currentWidth/2, yBase, z, 0.7, 0.3, 0, colorSide),   // base
+        addVertex(currentWidth/2, yTop, z, 0.7, 0.3, 0, colorSide)     // top
+      );
+    }
+    
+    // 4. Rueda de scroll y botones
+    // Rueda del scroll (cilindro simplificado)
+    const wheelSegments = 8;
+    const wheelRadius = 0.02;
+    const wheelWidth = 0.03;
+    const wheelZ = -length/6;
+    const wheelY = height * 0.7;
+    
+    for (let i = 0; i <= wheelSegments; i++) {
+      const angle = (i / wheelSegments) * Math.PI * 2;
+      const x = Math.cos(angle) * wheelRadius;
+      const z = wheelZ + Math.sin(angle) * wheelRadius;
+      
+      // Dos lados de la rueda
+      addVertex(x, wheelY, z, x, 0, z, colorWheel);
+      addVertex(x, wheelY - wheelWidth, z, x, 0, z, colorWheel);
+    }
+    
+    // Botón central (bajo la rueda)
+    const middleButton = addVertex(0, wheelY - wheelWidth - 0.01, wheelZ, 
+                                  0, -1, 0, colorButtons);
+    
+    // Botones laterales
+    const leftButton = [
+      addVertex(-width/3, height * 0.6, length/4, 0, 0, 1, colorButtons),
+      addVertex(-width/4, height * 0.6, length/4, 0, 0, 1, colorButtons),
+      addVertex(-width/3, height * 0.5, length/4, 0, 0, 1, colorButtons),
+      addVertex(-width/4, height * 0.5, length/4, 0, 0, 1, colorButtons)
+    ];
+    
+    const rightButton = [
+      addVertex(width/4, height * 0.6, length/4, 0, 0, 1, colorButtons),
+      addVertex(width/3, height * 0.6, length/4, 0, 0, 1, colorButtons),
+      addVertex(width/4, height * 0.5, length/4, 0, 0, 1, colorButtons),
+      addVertex(width/3, height * 0.5, length/4, 0, 0, 1, colorButtons)
+    ];
+    
+    // 5. LED indicador (en la parte delantera)
+    const led = addVertex(0, height * 0.2, -length/2 + 0.01, 
+                         0, 0, -1, colorLED);
+    
+    // Construcción de los índices para los triángulos
+    
+    // Base inferior
+    indices.push(base[0], base[1], base[2], base[0], base[2], base[3]);
+    
+    // Parte superior curvada
+    for (let l = 0; l < lengthSegments; l++) {
+      for (let w = 0; w < segments; w++) {
+        const current = l * (segments + 1) + w + 4; // +4 por los vértices base
+        const next = current + segments + 1;
+        
+        indices.push(
+          current, next, current + 1,
+          current + 1, next, next + 1
+        );
+      }
+    }
+    
+    // Lados
+    const sideStart = 4 + (lengthSegments + 1) * (segments + 1);
+    for (let i = 0; i < lengthSegments; i++) {
+      const baseLeft = sideStart + i * 4;
+      const baseRight = baseLeft + 2;
+      
+      // Lado izquierdo
+      indices.push(
+        baseLeft, baseLeft + 1, baseLeft + 4,
+        baseLeft + 1, baseLeft + 5, baseLeft + 4
+      );
+      
+      // Lado derecho
+      indices.push(
+        baseRight, baseRight + 4, baseRight + 1,
+        baseRight + 1, baseRight + 4, baseRight + 5
+      );
+    }
+    
+    // Rueda del scroll
+    const wheelStart = sideStart + (lengthSegments + 1) * 4;
+    for (let i = 0; i < wheelSegments; i++) {
+      const current = wheelStart + i * 2;
+      const next = wheelStart + ((i + 1) % wheelSegments) * 2;
+      
+      // Cara exterior
+      indices.push(current, next, current + 1);
+      indices.push(current + 1, next, next + 1);
+      
+      // Conectar al botón central
+      indices.push(current + 1, next + 1, middleButton);
+    }
+    
+    // Botones laterales
+    indices.push(
+      leftButton[0], leftButton[1], leftButton[2],
+      leftButton[1], leftButton[3], leftButton[2],
+      rightButton[0], rightButton[2], rightButton[1],
+      rightButton[1], rightButton[2], rightButton[3]
+    );
+    
+    // LED (pequeño triángulo)
+    indices.push(
+      led, base[0], base[1]
+    );
+    
+    // Creación del VAO y los buffers
+    this.mouseVAO = gl.createVertexArray();
+    gl.bindVertexArray(this.mouseVAO);
+    
+    // Buffer de vértices
+    const vertexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    
+    // Buffer de normales
+    const normalBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    
+    // Buffer de colores
+    const colorBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 0, 0);
+    
+    // Buffer de índices
+    this.indexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+    
+    gl.bindVertexArray(null);
+    
+    this.numIndices = indices.length;
+  
+    // ============ AGREGAR AQUÍ ============ //
+    // Buffer de aristas (contorno principal)
+    const aristas = [
+      // Base
+      0,1, 1,2, 2,3, 3,0,
+      // Lados izquierdo
+      8,9, 9,10, 10,11,
+      // Lado derecho
+      12,13, 13,14, 14,15,
+      // Rueda scroll (simplificada)
+      24,25, 26,27
+    ];
+    
+    this.numAristas = aristas.length;
+    this.aristasBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.aristasBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(aristas), gl.STATIC_DRAW);
+    // ============ FIN DE AGREGADO ============ //
+  }
+
+  dibuja(gl) {
+    gl.bindVertexArray(this.mouseVAO);
+    
+    if(modoLineas) {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.aristasBuffer);
+      gl.drawElements(gl.LINES, this.numAristas, gl.UNSIGNED_SHORT, 0);
+    } else {
+      gl.drawElements(gl.TRIANGLES, this.numIndices, gl.UNSIGNED_SHORT, 0);
+    }
+    
+    gl.bindVertexArray(null);
+  }
+}
+
+
+
+        /***************************************************************************/
+        /* Eventos del Ratón                                                       */
+        /***************************************************************************/
+
+        function mouseDown(event) {
+          var posx = new Number();
+          var posy = new Number();
+
+          /* Obtiene la coordenada dentro de la área mayor */
+          if (event.x != undefined && event.y != undefined) {
+            posx = event.x;
+            posy = event.y;
+          } else {
+            posx = event.clientX + document.body.scrollLeft + document.documentElement.scrollLeft;
+            posy = event.clientY + document.body.scrollTop + document.documentElement.scrollTop;
+          }
+
+          /* Obtiene la coordenada dentro del canvas */
+          posx = posx - canvas.offsetLeft;
+          posy = posy - canvas.offsetTop;
+
+          if (event.button == 0){ // botón izquierdo
+            Matriz = MatrizRotacion.slice(); /* Copia */
+            arcBall.primerPunto(posx, posy);
+            boton_izq_presionado = true;
+          } else if (event.button == 2) // botón derecho
+            boton_der_presionado = true;
+
+          return false;
+        };
+
+        function mouseUp(e){
+          boton_izq_presionado = false;
+          boton_der_presionado = false;
+        };
+
+        function mouseMove(event) {
+          var posx = new Number();
+          var posy = new Number();
+
+          /* Obtiene la coordenada dentro de la área mayor */
+          if (event.x != undefined && event.y != undefined) {
+            posx = event.x;
+            posy = event.y;
+          } else {
+            posx = event.clientX + document.body.scrollLeft + document.documentElement.scrollLeft;
+            posy = event.clientY + document.body.scrollTop + document.documentElement.scrollTop;
+          }
+
+          /* Obtiene la coordenada dentro del canvas */
+          posx = posx - canvas.offsetLeft;
+          posy = posy - canvas.offsetTop;
+
+          if (boton_izq_presionado) {
+            let q = arcBall.segundoPunto(posx, posy);
+            Cuaternion.rota2(MatrizRotacion, q);
+            multiplica(MatrizRotacion, MatrizRotacion, Matriz);
+          } else if (boton_der_presionado){
+            posx = (posx * 10 / canvas.width) - 5;
+            posy = (10 - posy * 10 / canvas.height) - 5;
+            tx = posx;
+            ty = posy;
+          }
+        };
+
+        function zoom(event) {
+          event.preventDefault();
+          if (event.deltaY > 0){
+            sx = sx * 0.9;
+            sy = sy * 0.9;
+            sz = sz * 0.9;
+          } else {
+            sx = sx * 1.1;
+            sy = sy * 1.1;
+            sz = sz * 1.1;
+          }  
+        };
+
+        function dibuja() {
+          gl.clearColor(colorFondo[0], colorFondo[1], colorFondo[2], colorFondo[3]);
+          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+              
+          // Matriz temporal para rotaciones automáticas
+          let MatrizAutoRotacion = new Array(16);
+          identidad(MatrizAutoRotacion);
+              
+          // Aplicamos rotaciones automáticas si están activas
+          if (rotacionAutomaticaX) {
+              anguloRotacionX += velocidadRotacion;
+              if (anguloRotacionX >= 360) anguloRotacionX -= 360;
+              rotacionX(MatrizAutoRotacion, anguloRotacionX);
+          } else {
+              anguloRotacionX = anguloActualX; // Mantener el ángulo actual
+          }
+        
+          if (rotacionAutomaticaY) {
+              anguloRotacionY += velocidadRotacion;
+              if (anguloRotacionY >= 360) anguloRotacionY -= 360;
+              rotacionY(MatrizAutoRotacion, anguloRotacionY);
+          } else {
+              anguloRotacionY = anguloActualY;
+          }
+        
+          if (rotacionAutomaticaZ) {
+              anguloRotacionZ += velocidadRotacion;
+              if (anguloRotacionZ >= 360) anguloRotacionZ -= 360;
+              rotacionZ(MatrizAutoRotacion, anguloRotacionZ);
+          } else {
+              anguloRotacionZ = anguloActualZ;
+          }
+        
+          // Combinamos las rotaciones automáticas con las manuales (ArcBall)
+          let MatrizRotacionCombinada = new Array(16);
+          multiplica(MatrizRotacionCombinada, MatrizRotacion, MatrizAutoRotacion);
+        
+          // Aplicamos las transformaciones globales
+          identidad(MatrizModelo);
+          traslacion(MatrizModelo, tx, ty, 0);
+          escalacion(MatrizModelo, sx, sy, sz);
+          escalacion(MatrizModelo, 2, 2, 2);
+          multiplica(MatrizModelo, MatrizModelo, MatrizRotacionCombinada);
+        
+          // Dibujamos los objetos...
+          gl.uniformMatrix4fv(uMatrizModelo, false, MatrizModelo);
+          monitor.dibuja(gl);
+        
+          let matrizTeclado = MatrizModelo.slice();
+          traslacion(matrizTeclado, 0, -0.8, 0.3);
+          rotacionX(matrizTeclado, -90);
+          gl.uniformMatrix4fv(uMatrizModelo, false, matrizTeclado);
+          teclado.dibuja(gl);
+        
+          let matrizMouse = MatrizModelo.slice();
+          traslacion(matrizMouse, 1.1, -0.8, 0.3);
+          gl.uniformMatrix4fv(uMatrizModelo, false, matrizMouse);
+          mouse.dibuja(gl);
+        
+          requestAnimationFrame(dibuja);
+        }
+
+        //BOTONES
+
+        function reinicia() {
+          tx = 0; 
+          ty = 0;
+          sx = 1; 
+          sy = 1; 
+          sz = 1;
+          velocidadRotacion = 1; // <-- ¡Aquí está el cambio clave!
+          anguloRotacionX = 0;
+          anguloRotacionY = 0;
+          anguloRotacionZ = 0;
+          anguloActualX = 0;
+          anguloActualY = 0;
+          anguloActualZ = 0;
+          rotacionAutomaticaX = false;
+          rotacionAutomaticaY = false;
+          rotacionAutomaticaZ = false;
+          identidad(MatrizRotacion);
+              
+          // Actualiza textos de los botones
+          document.getElementById("girarX").textContent = "Girar X";
+          document.getElementById("girarY").textContent = "Girar Y";
+          document.getElementById("girarZ").textContent = "Girar Z";
+              
+          dibuja();
+        }
+
+        function toggleRotacionX() {
+          rotacionAutomaticaX = !rotacionAutomaticaX;
+          if (rotacionAutomaticaX) {
+              // Al activar, comenzamos desde el ángulo actual guardado
+              anguloRotacionX = anguloActualX;
+              document.getElementById("girarX").textContent = "Detener X";
+          } else {
+              // Al detener:
+              // 1. Aplicamos la rotación acumulada a MatrizRotacion
+              let tempMatriz = new Array(16);
+              identidad(tempMatriz);
+              rotacionX(tempMatriz, anguloRotacionX); // Aplicamos la rotación actual
+              multiplica(MatrizRotacion, tempMatriz, MatrizRotacion); // Fusionamos con la rotación global
+              anguloRotacionX = 0;
+              anguloActualX = 0; // También reiniciamos el ángulo guardado
+              document.getElementById("girarX").textContent = "Girar X";
+          }
+        }
+
+        function toggleRotacionY() {
+          rotacionAutomaticaY = !rotacionAutomaticaY;
+          if (rotacionAutomaticaY) {
+              anguloRotacionY = anguloActualY;
+              document.getElementById("girarY").textContent = "Detener Y";
+          } else {
+              let tempMatriz = new Array(16);
+              identidad(tempMatriz);
+              rotacionY(tempMatriz, anguloRotacionY);
+              multiplica(MatrizRotacion, tempMatriz, MatrizRotacion);
+              anguloRotacionY = 0;
+              anguloActualY = 0;
+              document.getElementById("girarY").textContent = "Girar Y";
+          }
+        }
+
+        function toggleRotacionZ() {
+          rotacionAutomaticaZ = !rotacionAutomaticaZ;
+          if (rotacionAutomaticaZ) {
+              anguloRotacionZ = anguloActualZ;
+              document.getElementById("girarZ").textContent = "Detener Z";
+          } else {
+              let tempMatriz = new Array(16);
+              identidad(tempMatriz);
+              rotacionZ(tempMatriz, anguloRotacionZ);
+              multiplica(MatrizRotacion, tempMatriz, MatrizRotacion);
+              anguloRotacionZ = 0;
+              anguloActualZ = 0;
+              document.getElementById("girarZ").textContent = "Girar Z";
+          }
+        }
+
+        //Lineas
+
+        function toggleModoLineas() {
+          modoLineas = !modoLineas;
+          gl.uniform1i(uModoLineas, modoLineas);
+          document.getElementById("lineas").textContent = modoLineas ? "Sólido" : "Líneas";
+          dibuja();
+        }
+
+        //Colores 
+
+        function cambiarFondoBlanco() {
+          colorFondo = [1.0, 1.0, 1.0, 1.0];
+          actualizarFondo();
+        }
+
+        function cambiarFondoVerde() {
+          colorFondo = [0.0, 1.0, 0.0, 1.0];
+          actualizarFondo();
+        }
+
+        function cambiarFondoAzul() {
+          colorFondo = [0.0, 0.0, 1.0, 1.0];
+          actualizarFondo();
+        }
+
+        function cambiarFondoRojo() {
+          colorFondo = [1.0, 0.0, 0.0, 1.0];
+          actualizarFondo();
+        }
+
+        function actualizarFondo() {
+          gl.uniform4fv(uColorFondo, colorFondo);
+          dibuja();
+        }
+
+
+
+        function main() {
+          canvas = document.getElementById("webglcanvas");
+          gl = canvas.getContext("webgl2");
+          if (!gl) {
+             document.write("WebGL 2.0 no está disponible en tu navegador");
+             return;
+          }
+          // Obtener ubicación del uniforme
+          
+          
+          document.querySelector("button:nth-child(7)").onclick = cambiarFondoBlanco;
+          document.querySelector("button:nth-child(8)").onclick = cambiarFondoVerde;
+          document.querySelector("button:nth-child(9)").onclick = cambiarFondoAzul;
+          document.querySelector("button:nth-child(10)").onclick = cambiarFondoRojo;
+          canvas.addEventListener("mousedown", mouseDown, false);
+          canvas.addEventListener("mouseup", mouseUp, false);
+          canvas.addEventListener("mouseout", mouseUp, false);
+          canvas.addEventListener("mousemove", mouseMove, false);
+          document.getElementById("lineas").onclick = toggleModoLineas;
+          document.getElementById("girarX").onclick = toggleRotacionX;
+          document.getElementById("girarY").onclick = toggleRotacionY;
+          document.getElementById("girarZ").onclick = toggleRotacionZ;
+          document.getElementById("reset").onclick = reinicia;
+          canvas.addEventListener("wheel", zoom, { passive: false });
+          gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+          compilaEnlazaLosShaders();
+
+          teclado = new TecladoMejorado(gl);
+          monitor = new MonitorPlano(gl);
+          mouse = new MouseDetallado(gl);
+          //cubo = new Cubo(gl);
+          arcBall = new ArcBall(500.0, 500.0);
+
+          gl.useProgram(programaID);
+          uMatrizProyeccion = gl.getUniformLocation(programaID, "uMatrizProyeccion");
+          uMatrizVista = gl.getUniformLocation(programaID, "uMatrizVista");
+          uMatrizModelo = gl.getUniformLocation(programaID, "uMatrizModelo");    
+          uModoLineas = gl.getUniformLocation(programaID, "uModoLineas");     
+          uColorFondo = gl.getUniformLocation(programaID, "uColorFondo");
+          gl.uniform4fv(uColorFondo, colorFondo); 
+          gl.uniform1i(uModoLineas, false);
+          ortho(MatrizProyeccion, -5, 5, -5, 5, -5, 5);
+          gl.uniformMatrix4fv(uMatrizProyeccion, false, MatrizProyeccion);
+          identidad(MatrizVista);
+          gl.uniformMatrix4fv(uMatrizVista, false, MatrizVista);
+          identidad(MatrizRotacion);
+          arcBall.ajusta(gl.canvas.width, gl.canvas.height);
+          gl.enable(gl.DEPTH_TEST);
+          gl.clearColor(0.0, 1.0, 1.0, 1.0);
+          dibuja();
+        }
+        window.onload = main;
+      </script>
+</body>
+</html>
